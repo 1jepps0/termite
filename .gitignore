@@ -1,0 +1,28 @@
+# build directories
+/build/
+/bin/
+/lib/
+/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# compiled object files
+*.o
+*.obj
+
+# compiled dynamic libraries
+*.so
+*.dylib
+
+# compiled static libraries
+*.a
+*.lib
+
+# temp files 
+*.tmp
+*.swp
+*.swo
+
+
+

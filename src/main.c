@@ -1,6 +1,7 @@
 // built in libraries
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 // installed libraries
 #include <glad/glad.h>
@@ -13,19 +14,41 @@
 #include <shader.h>
 #include <text.h>
 #include <window.h>
+#include <esc_seq.h>
 
 int master_fd;
 int child_pid;
 
-float text_scale = 0.35;
+float text_scale = 0.35f;
 bool cursor_visible = true;
 double last_toggle = 0.0;
+double last_input_time = 0.0;
 
 int term_cursor_row = 0;
 int term_cursor_col = 0;
 
+static int *grid = NULL;
+static GLuint shaderProgram;
+static int scroll_top = 0;
+static int scroll_bottom = 0;
+
 extern int master_fd;
 
+static void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
+  if (width <= 0 || height <= 0)
+    return;
+  glViewport(0, 0, width, height);
+  if (shaderProgram != 0)
+    shader_update_projection(shaderProgram, width, height);
+  if (grid) {
+    grid = ResizeGrid(grid, width, height, &text_scale, &term_cursor_row, &term_cursor_col,
+                      &scroll_top, &scroll_bottom);
+    if (master_fd > 0)
+      pty_set_winsize(master_fd, grid_y_size, grid_x_size);
+  }
+}
+
+// set up input callbacks
 void char_callback(GLFWwindow *window, unsigned int codepoint) {
   char c = (char)codepoint;
   pty_write(master_fd, &c, 1);
@@ -33,7 +56,7 @@ void char_callback(GLFWwindow *window, unsigned int codepoint) {
 
 void key_callback(GLFWwindow *window, int key, int scancode, int action,
                   int mods) {
-  if (action == GLFW_PRESS) {
+  if (action == GLFW_PRESS || action == GLFW_REPEAT) {
     switch (key) {
     case GLFW_KEY_ENTER:
       pty_write(master_fd, "\r", 1);
@@ -53,6 +76,10 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action,
     case GLFW_KEY_LEFT:
       pty_write(master_fd, "\x1b[D", 3);
       break;
+    case GLFW_KEY_C:
+      if (mods & GLFW_MOD_CONTROL)
+        pty_write(master_fd, "\x03", 1);
+      break;
     }
   }
 }
@@ -65,6 +92,7 @@ int main(void) {
     return -1;
   }
 
+  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
   glfwSetCharCallback(window, char_callback);
   glfwSetKeyCallback(window, key_callback);
 
@@ -73,15 +101,23 @@ int main(void) {
     return -1;
   }
 
+  TextSetBaseScale(text_scale);
+
   // set up shaders
-  GLuint shaderProgram = initialize_shader();
+  shaderProgram = initialize_shader();
 
   x_spacing = glyph_width * text_scale;
   y_spacing = glyph_height * text_scale;
 
-  int *grid = SetupGrid();
+  grid = SetupGrid();
+  if (!grid) {
+    return -1;
+  }
+  scroll_top = 0;
+  scroll_bottom = grid_y_size - 1;
+
   int baseline_y = ascent * text_scale;
-  vec3 fg = {0.9, 0.9f, 1.0f};
+  vec3 fg = {0.9f, 0.9f, 1.0f};
   vec3 bg = {0.02f, 0.02f, 0.1f};
 
   if (pty_spawn(NULL, &master_fd, &child_pid) < 0) {
@@ -89,8 +125,15 @@ int main(void) {
     return -1;
   }
 
-  // Tell the shell how big the terminal is (rows x cols)
+  // set window size
   pty_set_winsize(master_fd, grid_y_size, grid_x_size);
+
+  esc_parser_t esc_parser;
+  esc_parser_init(&esc_parser);
+
+  double initial_time = glfwGetTime();
+  if (last_input_time == 0.0)
+    last_input_time = initial_time;
 
   // main loop
   while (!glfwWindowShouldClose(window)) {
@@ -99,8 +142,17 @@ int main(void) {
     ssize_t n = pty_read(master_fd, buf, sizeof(buf));
 
     if (n > 0) {
+      double input_now = glfwGetTime();
+      cursor_visible = true;
+      last_toggle = input_now;
+      last_input_time = input_now;
       for (ssize_t i = 0; i < n; i++) {
         uint8_t byte = buf[i];
+
+        if (esc_parser_process(&esc_parser, byte, &term_cursor_row, &term_cursor_col, grid,
+                               grid_x_size, grid_y_size, &scroll_top, &scroll_bottom)) {
+          continue;
+        }
 
         // Handle control characters
         switch (byte) {
@@ -110,34 +162,32 @@ int main(void) {
         case '\n': // newline
           term_cursor_col = 0;
           term_cursor_row++;
-          if (term_cursor_row >= grid_y_size) {
-            // scroll up one line
-            memmove(grid, grid + grid_x_size,
-                    sizeof(int) * grid_x_size * (grid_y_size - 1));
-            memset(grid + grid_x_size * (grid_y_size - 1), ' ',
-                   sizeof(int) * grid_x_size);
-            term_cursor_row = grid_y_size - 1;
+          if (term_cursor_row > scroll_bottom) {
+            term_scroll_region_up(grid, grid_x_size, scroll_top, scroll_bottom);
+            term_cursor_row = scroll_bottom;
           }
           break;
         case '\b': // backspace
-          if (term_cursor_col > 0)
+          if (term_cursor_col > 0) {
             term_cursor_col--;
-          grid[term_cursor_row * grid_x_size + term_cursor_col] = ' ';
+          }
+          break;
+        case '\x7F': // DEL
+          if (term_cursor_col > 0) {
+            term_cursor_col--;
+            grid[term_cursor_row * grid_x_size + term_cursor_col] = ' ';
+          }
           break;
         default:
           if (byte >= 32 && byte <= 126) {
-            // printable ASCII
             grid[term_cursor_row * grid_x_size + term_cursor_col] = byte;
             term_cursor_col++;
             if (term_cursor_col >= grid_x_size) {
               term_cursor_col = 0;
               term_cursor_row++;
-              if (term_cursor_row >= grid_y_size) {
-                memmove(grid, grid + grid_x_size,
-                        sizeof(int) * grid_x_size * (grid_y_size - 1));
-                memset(grid + grid_x_size * (grid_y_size - 1), ' ',
-                       sizeof(int) * grid_x_size);
-                term_cursor_row = grid_y_size - 1;
+              if (term_cursor_row > scroll_bottom) {
+                term_scroll_region_up(grid, grid_x_size, scroll_top, scroll_bottom);
+                term_cursor_row = scroll_bottom;
               }
             }
           }
@@ -151,19 +201,25 @@ int main(void) {
 
     // blink the cursor every 500 ms
     double now = glfwGetTime();
-    if (now - last_toggle >= 0.5) {
+    const double blink_interval = 0.5;
+    const double input_pause = 0.15;
+    if (now - last_input_time < input_pause) {
+      cursor_visible = true;
+      last_toggle = now;
+    } else if (now - last_toggle >= blink_interval) {
       cursor_visible = !cursor_visible;
       last_toggle = now;
     }
 
     for (int y = 0; y < grid_y_size; y++) {
-      int draw_y = grid_y_size - 1 - y; // flip vertically
+      int draw_y = grid_y_size - 1 - y; 
 
       for (int x = 0; x < grid_x_size; x++) {
         char c = (char)grid[y * grid_x_size + x];
         float xpos = margin_x + x * x_spacing;
-        float ypos = margin_y * 1.25 + draw_y * y_spacing;
+        float ypos = margin_y * 1.25f + draw_y * y_spacing;
 
+        // call the right function depending on if the cursor is on the char
         if (cursor_visible && y == term_cursor_row && x == term_cursor_col)
           RenderCursor(shaderProgram, text_scale, draw_y, x, fg, bg, c);
         else

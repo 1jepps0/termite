@@ -15,6 +15,7 @@ set(SOURCES
     src/glad.c
 	src/window.c
 	src/pty_wrap.c
+	src/esc_seq.c
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

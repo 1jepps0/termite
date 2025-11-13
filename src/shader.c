@@ -4,6 +4,7 @@
 #include <cglm/cglm.h>
 
 mat4 projection;
+static GLint projection_location = -1;
 
 void initialize_VBO_VAO(unsigned int *VBO, unsigned int *VAO) {
 	glGenVertexArrays(1, VAO);
@@ -115,12 +116,20 @@ GLuint initialize_shader() {
 	glm_ortho(0.0f, 1280.0f, 0.0f, 720.0f, -1.0f, 1.0f, projection);
 
 	// Use the shader
-	GLuint projLoc = glGetUniformLocation(shaderProgram, "projection");
+	projection_location = glGetUniformLocation(shaderProgram, "projection");
 	glUseProgram(shaderProgram);
-	glUniformMatrix4fv(projLoc, 1, GL_FALSE, (const GLfloat*)projection);
+	glUniformMatrix4fv(projection_location, 1, GL_FALSE, (const GLfloat*)projection);
 	glUniform1i(glGetUniformLocation(shaderProgram, "text"), 0); // GL_TEXTURE0
 
 	return shaderProgram;
+}
+
+void shader_update_projection(GLuint shaderProgram, int width, int height) {
+    glm_ortho(0.0f, (float)width, 0.0f, (float)height, -1.0f, 1.0f, projection);
+    glUseProgram(shaderProgram);
+    if (projection_location == -1)
+        projection_location = glGetUniformLocation(shaderProgram, "projection");
+    glUniformMatrix4fv(projection_location, 1, GL_FALSE, (const GLfloat *)projection);
 }
 
 

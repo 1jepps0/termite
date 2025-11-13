@@ -3,7 +3,7 @@
 #include <pty.h>        // forkpty
 #include <unistd.h>     // execlp, read, write
 #include <sys/ioctl.h>  // TIOCSWINSZ
-#include <fcntl.h>      // fcntl
+#include <fcntl.h>      
 #include <string.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -39,6 +39,6 @@ ssize_t pty_write(int master_fd, const void* buf, size_t n) {
 }
 
 ssize_t pty_read(int master_fd, uint8_t* buf, size_t cap) {
-    return read(master_fd, buf, cap); // nonblocking: returns -1/EAGAIN if nothing
+    return read(master_fd, buf, cap); 
 }
 

@@ -3,6 +3,8 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <shader.h>
+#include <stdlib.h>
+#include <string.h>
 
 struct Character {
 	unsigned int TextureID;  // ID handle of the glyph texture
@@ -21,34 +23,42 @@ int glyph_height;
 
 int ascent;
 
-int x_resolution =  1280;
+int x_resolution = 1280;
 int y_resolution = 720;
 
-int x_spacing;
-int y_spacing;
-int margin_x = 10;   // pixels on left/right
-int margin_y = 10;   // pixels on top/bottom
+float x_spacing;
+float y_spacing;
+float margin_x = 10.0f;
+float margin_y = 10.0f;
 
 int grid_x_size;
 int grid_y_size;
 
-int cursor_row = 0;
-int cursor_col = 0;
+static const int base_x_resolution = 1280;
+static const int base_y_resolution = 720;
+static const float base_margin_x = 10.0f;
+static const float base_margin_y = 10.0f;
+static float base_text_scale = 0.35f;
 
+void TextSetBaseScale(float scale) {
+	base_text_scale = scale;
+}
 
-
-
-int* SetupGrid() {
+int *SetupGrid(void) {
 	// setup a 2d array that stores all the possible positions of characters and their values
 	// grid needs to be freed
 	// grid[row * cols + col]
 
-	grid_x_size = (x_resolution - 2 * margin_x) / x_spacing;
-	grid_y_size = (y_resolution - 1 * margin_y) / y_spacing;
+	grid_x_size = (int)((x_resolution - 2.0f * margin_x) / x_spacing);
+	if (grid_x_size < 1)
+		grid_x_size = 1;
+	grid_y_size = (int)((y_resolution - margin_y) / y_spacing);
+	if (grid_y_size < 1)
+		grid_y_size = 1;
 
-
-	int *grid = malloc(grid_x_size * grid_y_size * sizeof(int));
-
+	int *grid = malloc((size_t)grid_x_size * (size_t)grid_y_size * sizeof(int));
+	if (!grid)
+		return NULL;
 
 	// fill grid with spaces
 	for (int y = 0; y < grid_y_size; y++) {
@@ -61,10 +71,8 @@ int* SetupGrid() {
 }
 
 
-
-int SetupCharacters() {
-
-
+int SetupCharacters(void) {
+  
 	initialize_VBO_VAO(&VBO, &VAO);
 	
 	FT_Library ft;
@@ -147,7 +155,7 @@ int SetupCharacters() {
 
 void RenderChar(GLuint shaderProgram, char character, float x, float y, float scale, vec3 color)
 {
-    // activate corresponding render state	
+  // activate corresponding render state	
 	glUseProgram(shaderProgram);
 	glUniform3f(glGetUniformLocation(shaderProgram, "textColor"), color[0], color[1], color[2]);
 	glUniform1i(glGetUniformLocation(shaderProgram, "solid"), 0); 
@@ -188,38 +196,113 @@ void RenderChar(GLuint shaderProgram, char character, float x, float y, float sc
 
 void RenderCursor(GLuint shaderProgram, float text_scale,  int row, int col, vec3 fg, vec3 bg, char c) {
     float x = margin_x + col * x_spacing;
-    float y = margin_y * 1.25f + row * y_spacing; // baseline position
-	
-    float w = x_spacing;
-    float h = y_spacing;
+    float baseline = margin_y * 1.25f + row * y_spacing;
 
-    // swap fg/bg for inverted look
+    struct Character reference = Characters[(unsigned char)'X'];
+    float extra = (y_spacing - reference.Size[1] * text_scale) * 0.5f;
+    float y_bottom = baseline - (reference.Size[1] - reference.Bearing[1]) * text_scale - extra;
+    float y_top = y_bottom + y_spacing;
+    float w = x_spacing;
+
     vec3 cursor_fg = { bg[0], bg[1], bg[2] };
     vec3 cursor_bg = { fg[0], fg[1], fg[2] };
 
-    // draw background quad (cell-sized, behind text)
     glUseProgram(shaderProgram);
-    glUniform3f(glGetUniformLocation(shaderProgram, "textColor"),
-                cursor_bg[0], cursor_bg[1], cursor_bg[2]);
+    glUniform3f(glGetUniformLocation(shaderProgram, "textColor"), cursor_bg[0], cursor_bg[1], cursor_bg[2]);
     glUniform1i(glGetUniformLocation(shaderProgram, "solid"), 1);
 
     float vertices[6][4] = {
-        { x,     y,     0.0f, 0.0f },
-        { x,     y+h,   0.0f, 1.0f },
-        { x+w,   y+h,   1.0f, 1.0f },
+        { x,     y_bottom,   0.0f, 0.0f },
+        { x,     y_top,      0.0f, 1.0f },
+        { x+w,   y_top,      1.0f, 1.0f },
 
-        { x,     y,     0.0f, 0.0f },
-        { x+w,   y+h,   1.0f, 1.0f },
-        { x+w,   y,     1.0f, 0.0f }
+        { x,     y_bottom,   0.0f, 0.0f },
+        { x+w,   y_top,      1.0f, 1.0f },
+        { x+w,   y_bottom,   1.0f, 0.0f }
     };
 
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
-	glBindVertexArray(VAO);
+    glBindVertexArray(VAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
-    // draw character on top, inverted
     glUniform1i(glGetUniformLocation(shaderProgram, "solid"), 0);
-    RenderChar(shaderProgram, c, x, y, text_scale, cursor_fg);
+    RenderChar(shaderProgram, c, x, baseline, text_scale, cursor_fg);
+}
+
+int *ResizeGrid(int *grid, int new_width, int new_height, float *text_scale, int *cursor_row, int *cursor_col, int *scroll_top, int *scroll_bottom) {
+    if (new_width <= 0 || new_height <= 0 || glyph_width == 0 || glyph_height == 0)
+        return grid;
+
+    float width_ratio = (float)new_width / (float)base_x_resolution;
+    float height_ratio = (float)new_height / (float)base_y_resolution;
+
+    float new_scale = base_text_scale * height_ratio;
+    if (new_scale < 0.01f)
+        new_scale = 0.01f;
+
+    x_resolution = new_width;
+    y_resolution = new_height;
+
+    margin_x = base_margin_x * width_ratio;
+    margin_y = base_margin_y * height_ratio;
+
+    x_spacing = glyph_width * new_scale;
+    y_spacing = glyph_height * new_scale;
+
+    if (x_spacing < 1.0f)
+        x_spacing = 1.0f;
+    if (y_spacing < 1.0f)
+        y_spacing = 1.0f;
+
+    int old_cols = grid_x_size;
+    int old_rows = grid_y_size;
+
+    grid_x_size = (int)((x_resolution - 2.0f * margin_x) / x_spacing);
+    if (grid_x_size < 1)
+        grid_x_size = 1;
+    grid_y_size = (int)((y_resolution - margin_y) / y_spacing);
+    if (grid_y_size < 1)
+        grid_y_size = 1;
+
+    size_t total_cells = (size_t)grid_x_size * (size_t)grid_y_size;
+    int *new_grid = malloc(total_cells * sizeof(int));
+    if (!new_grid)
+        return grid;
+
+    for (size_t idx = 0; idx < total_cells; idx++)
+        new_grid[idx] = ' ';
+
+    int copy_rows = old_rows < grid_y_size ? old_rows : grid_y_size;
+    int copy_cols = old_cols < grid_x_size ? old_cols : grid_x_size;
+
+    for (int y = 0; y < copy_rows; y++) {
+        memcpy(new_grid + y * grid_x_size,
+               grid + y * old_cols,
+               (size_t)copy_cols * sizeof(int));
+    }
+
+    free(grid);
+
+    if (*cursor_row >= grid_y_size)
+        *cursor_row = grid_y_size - 1;
+    if (*cursor_row < 0)
+        *cursor_row = 0;
+    if (*cursor_col >= grid_x_size)
+        *cursor_col = grid_x_size - 1;
+    if (*cursor_col < 0)
+        *cursor_col = 0;
+
+    if (*scroll_top < 0)
+        *scroll_top = 0;
+    if (*scroll_top >= grid_y_size)
+        *scroll_top = grid_y_size - 1;
+    if (*scroll_bottom < *scroll_top)
+        *scroll_bottom = *scroll_top;
+    if (*scroll_bottom >= grid_y_size)
+        *scroll_bottom = grid_y_size - 1;
+
+    *text_scale = new_scale;
+    return new_grid;
 }
 

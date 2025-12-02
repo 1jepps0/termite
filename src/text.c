@@ -7,10 +7,10 @@
 #include <string.h>
 
 struct Character {
-	unsigned int TextureID;  // ID handle of the glyph texture
-	ivec2 Size;       // Size of glyph
-	ivec2 Bearing;    // Offset from baseline to left/top of glyph
-	unsigned int Advance;    // Offset to advance to next glyph
+	unsigned int TextureID;  // glyph texture id
+	ivec2 Size;       // glyph size in pixels
+	ivec2 Bearing;    // offset from baseline to top left
+	unsigned int Advance;    // advance to next glyph
 };
 
 struct Character Characters[128];
@@ -40,14 +40,14 @@ static const float base_margin_x = 10.0f;
 static const float base_margin_y = 10.0f;
 static float base_text_scale = 0.35f;
 
-void TextSetBaseScale(float scale) {
+void text_set_base_scale(float scale) {
 	base_text_scale = scale;
 }
 
-int *SetupGrid(void) {
-	// setup a 2d array that stores all the possible positions of characters and their values
-	// grid needs to be freed
-	// grid[row * cols + col]
+int *text_setup_grid(void) {
+	// allocate 2d grid mapping positions to glyph values
+	// grid needs to be freed by caller
+	// layout uses grid[row * cols + col]
 
 	grid_x_size = (int)((x_resolution - 2.0f * margin_x) / x_spacing);
 	if (grid_x_size < 1)
@@ -71,8 +71,9 @@ int *SetupGrid(void) {
 }
 
 
-int SetupCharacters(void) {
+int text_setup_characters(void) {
   
+	// prepare quad buffers before uploading glyphs
 	initialize_VBO_VAO(&VBO, &VAO);
 	
 	FT_Library ft;
@@ -97,7 +98,7 @@ int SetupCharacters(void) {
 	}
 
 
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // disable byte-alignment restriction
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // disable byte alignment restriction
   
 	for (unsigned char c = 0; c < 128; c++)
 	{
@@ -124,8 +125,8 @@ int SetupCharacters(void) {
 			face->glyph->bitmap.buffer
 		);
 
-		glyph_width  = face->glyph->advance.x >> 6; // divide by 64
-		glyph_height = face->size->metrics.height >> 6; // ascent+descent
+		glyph_width  = face->glyph->advance.x >> 6; // divide advance by 64
+		glyph_height = face->size->metrics.height >> 6; // compute ascent plus descent
 		ascent = face->size->metrics.ascender >> 6;
 
 
@@ -153,9 +154,9 @@ int SetupCharacters(void) {
 	return 0;
 }
 
-void RenderChar(GLuint shaderProgram, char character, float x, float y, float scale, vec3 color)
+void text_render_char(GLuint shaderProgram, char character, float x, float y, float scale, vec3 color)
 {
-  // activate corresponding render state	
+  // activate render state for character
 	glUseProgram(shaderProgram);
 	glUniform3f(glGetUniformLocation(shaderProgram, "textColor"), color[0], color[1], color[2]);
 	glUniform1i(glGetUniformLocation(shaderProgram, "solid"), 0); 
@@ -169,7 +170,7 @@ void RenderChar(GLuint shaderProgram, char character, float x, float y, float sc
 
 	float w = ch.Size[0] * scale;
 	float h = ch.Size[1] * scale;
-	// update VBO for each character
+	// update vbo for each character
 	float vertices[6][4] = {
 		{ xpos,     ypos + h,   0.0f, 0.0f },            
 		{ xpos,     ypos,       0.0f, 1.0f },
@@ -181,20 +182,20 @@ void RenderChar(GLuint shaderProgram, char character, float x, float y, float sc
 	};
 	// render glyph texture over quad
 	glBindTexture(GL_TEXTURE_2D, ch.TextureID);
-	// update content of VBO memory
+	// update content of vbo memory
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices); 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	// render quad
 	glDrawArrays(GL_TRIANGLES, 0, 6);
-	// now advance cursors for next glyph (note that advance is number of 1/64 pixels)
-	x += (ch.Advance >> 6) * scale; // bitshift by 6 to get value in pixels (2^6 = 64)
+	// now advance cursor for next glyph
+	x += (ch.Advance >> 6) * scale; // convert from 1/64th pixels to pixels
 	glBindVertexArray(0);
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 
-void RenderCursor(GLuint shaderProgram, float text_scale,  int row, int col, vec3 fg, vec3 bg, char c) {
+void text_render_cursor(GLuint shaderProgram, float text_scale,  int row, int col, vec3 fg, vec3 bg, char c) {
     float x = margin_x + col * x_spacing;
     float baseline = margin_y * 1.25f + row * y_spacing;
 
@@ -227,10 +228,10 @@ void RenderCursor(GLuint shaderProgram, float text_scale,  int row, int col, vec
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glUniform1i(glGetUniformLocation(shaderProgram, "solid"), 0);
-    RenderChar(shaderProgram, c, x, baseline, text_scale, cursor_fg);
+    text_render_char(shaderProgram, c, x, baseline, text_scale, cursor_fg);
 }
 
-int *ResizeGrid(int *grid, int new_width, int new_height, float *text_scale, int *cursor_row, int *cursor_col, int *scroll_top, int *scroll_bottom) {
+int *text_resize_grid(int *grid, int new_width, int new_height, float *text_scale, int *cursor_row, int *cursor_col, int *scroll_top, int *scroll_bottom) {
     if (new_width <= 0 || new_height <= 0 || glyph_width == 0 || glyph_height == 0)
         return grid;
 

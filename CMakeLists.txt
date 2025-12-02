@@ -9,6 +9,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # source files 
 set(SOURCES
+    src/app.c
     src/main.c
     src/text.c
     src/shader.c
@@ -16,6 +17,7 @@ set(SOURCES
 	src/window.c
 	src/pty_wrap.c
 	src/esc_seq.c
+    src/terminal.c
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

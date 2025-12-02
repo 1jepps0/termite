@@ -3,7 +3,8 @@
 
 #include <GLFW/glfw3.h>
 
-GLFWwindow* InitializeWindow(); 
+// create window and initialize glfw state
+GLFWwindow* window_initialize(void); 
 
 #endif // WINDOW_H 
 

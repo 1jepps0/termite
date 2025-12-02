@@ -7,6 +7,7 @@ mat4 projection;
 static GLint projection_location = -1;
 
 void initialize_VBO_VAO(unsigned int *VBO, unsigned int *VAO) {
+	// configure quad geometry buffers
 	glGenVertexArrays(1, VAO);
 	glGenBuffers(1, VBO);
 	glBindVertexArray(*VAO);
@@ -25,12 +26,12 @@ char* load_shader_source(const char* filepath) {
         return NULL;
     }
 
-    // Get file size
+    // get file size
     fseek(file, 0, SEEK_END);
     long length = ftell(file);
     rewind(file);
 
-    // Allocate memory (+1 for null terminator)
+    // allocate memory with room for terminator
     char* source = (char*)malloc(length + 1);
     if (!source) {
         fprintf(stderr, "Failed to allocate memory for shader\n");
@@ -38,7 +39,7 @@ char* load_shader_source(const char* filepath) {
         return NULL;
     }
 
-    // Read file into memory
+    // read file into memory
     fread(source, 1, length, file);
     source[length] = '\0';  // null terminate
     fclose(file);
@@ -65,7 +66,7 @@ GLuint compile_shader(const char* source, GLenum type) {
 }
 
 
-// link vertex & fragment shaders into a program
+// link vertex and fragment shaders into a program
 GLuint create_shader_program(const char* vertex_src, const char* fragment_src) {
     GLuint vertexShader = compile_shader(vertex_src, GL_VERTEX_SHADER);
     GLuint fragmentShader = compile_shader(fragment_src, GL_FRAGMENT_SHADER);
@@ -97,7 +98,7 @@ GLuint initialize_shader() {
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	// Load shader files
+	// load shader files
 	char* vertexSource = load_shader_source("../src/vertex.glsl");
 	char* fragmentSource = load_shader_source("../src/fragment.glsl");
 
@@ -105,17 +106,17 @@ GLuint initialize_shader() {
 		printf("ERROR: Shader source could not be loaded\n");
 	}
 
-	// Create shader program
+	// create shader program
 	GLuint shaderProgram = create_shader_program(vertexSource, fragmentSource);
 
-	// Free memory
+	// free memory
 	free(vertexSource);
 	free(fragmentSource);
 	
 	// set projection matrix
 	glm_ortho(0.0f, 1280.0f, 0.0f, 720.0f, -1.0f, 1.0f, projection);
 
-	// Use the shader
+	// use the shader
 	projection_location = glGetUniformLocation(shaderProgram, "projection");
 	glUseProgram(shaderProgram);
 	glUniformMatrix4fv(projection_location, 1, GL_FALSE, (const GLfloat*)projection);

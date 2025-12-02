@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+// move scroll region upward by one line
 void term_scroll_region_up(int *grid, int grid_x_size, int scroll_top, int scroll_bottom) {
     if (scroll_top >= scroll_bottom)
         return;
@@ -14,6 +15,7 @@ void term_scroll_region_up(int *grid, int grid_x_size, int scroll_top, int scrol
     memset(grid + scroll_bottom * grid_x_size, ' ', sizeof(int) * grid_x_size);
 }
 
+// move scroll region downward by one line
 void term_scroll_region_down(int *grid, int grid_x_size, int scroll_top, int scroll_bottom) {
     if (scroll_top >= scroll_bottom)
         return;
@@ -25,6 +27,7 @@ void term_scroll_region_down(int *grid, int grid_x_size, int scroll_top, int scr
 }
 
 void esc_parser_init(esc_parser_t *parser) {
+    // reset parser buffers and state
     parser->state = ESC_STATE_NORMAL;
     parser->buf_pos = 0;
     parser->param_count = 0;
@@ -46,6 +49,7 @@ static int parse_int(const char *str, size_t len, int *out) {
 }
 
 static void parse_params(esc_parser_t *parser) {
+    // extract numeric parameters separated by semicolons
     parser->param_count = 0;
     parser->params_present = false;
     size_t i = 0;
@@ -68,11 +72,13 @@ static void parse_params(esc_parser_t *parser) {
     }
 }
 
+// handle state machine for escape sequence parsing
 int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int *cursor_col, int *grid, int grid_x_size, int grid_y_size, int *scroll_top, int *scroll_bottom) {
     switch (parser->state) {
     case ESC_STATE_NORMAL:
         parser->osc_waiting_backslash = false;
         if (byte == 0x1b) {
+            // begin escape sequence detection
             parser->state = ESC_STATE_ESC;
             parser->buf_pos = 0;
             return 1;
@@ -82,6 +88,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
     case ESC_STATE_ESC:
         if (parser->osc_waiting_backslash) {
             if (byte == '\\') {
+                // terminate osc sequence
                 parser->state = ESC_STATE_NORMAL;
                 parser->buf_pos = 0;
                 parser->osc_waiting_backslash = false;
@@ -91,14 +98,17 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
             }
         }
         if (byte == '[') {
+            // start csi sequence
             parser->state = ESC_STATE_CSI;
             parser->buf_pos = 0;
             return 1;
         } else if (byte == ']') {
+            // start osc sequence
             parser->state = ESC_STATE_OSC;
             parser->buf_pos = 0;
             return 1;
         } else if (byte == 'D') {
+            // index escape declass cursor down
             if (*cursor_row >= *scroll_top && *cursor_row <= *scroll_bottom) {
                 if (*cursor_row == *scroll_bottom) {
                     term_scroll_region_up(grid, grid_x_size, *scroll_top, *scroll_bottom);
@@ -112,6 +122,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
             parser->buf_pos = 0;
             return 1;
         } else if (byte == 'M') {
+            // reverse index escape declass cursor up
             if (*cursor_row >= *scroll_top && *cursor_row <= *scroll_bottom) {
                 if (*cursor_row == *scroll_top) {
                     term_scroll_region_down(grid, grid_x_size, *scroll_top, *scroll_bottom);
@@ -125,6 +136,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
             parser->buf_pos = 0;
             return 1;
         } else if (byte == 'E') {
+            // next line escape moves cursor and resets column
             if (*cursor_row >= *scroll_top && *cursor_row <= *scroll_bottom) {
                 if (*cursor_row == *scroll_bottom) {
                     term_scroll_region_up(grid, grid_x_size, *scroll_top, *scroll_bottom);
@@ -145,11 +157,13 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
 
     case ESC_STATE_OSC:
         if (byte == 0x07) {
+            // bel terminates osc
             parser->state = ESC_STATE_NORMAL;
             parser->buf_pos = 0;
             parser->osc_waiting_backslash = false;
             return 1;
         } else if (byte == 0x1b) {
+            // esc expects final backslash
             parser->osc_waiting_backslash = true;
             parser->state = ESC_STATE_ESC;
             return 1;
@@ -166,20 +180,25 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
 
             switch (cmd) {
             case 'A':
+                // cursor up csi n a
                 *cursor_row = (*cursor_row - n) < 0 ? 0 : (*cursor_row - n);
                 break;
             case 'B':
+                // cursor down csi n b
                 *cursor_row = (*cursor_row + n) >= grid_y_size ? (grid_y_size - 1) : (*cursor_row + n);
                 break;
             case 'C':
+                // cursor forward csi n c
                 *cursor_col = (*cursor_col + n) >= grid_x_size ? (grid_x_size - 1) : (*cursor_col + n);
                 break;
             case 'D':
+                // cursor backward csi n d
                 *cursor_col = (*cursor_col - n) < 0 ? 0 : (*cursor_col - n);
                 break;
             case 'H':
             case 'f':
                 {
+                    // cursor position csi row col h or f
                     int row = parser->param_count > 0 ? parser->params[0] : 1;
                     int col = parser->param_count > 1 ? parser->params[1] : 1;
                     *cursor_row = (row - 1) < 0 ? 0 : ((row - 1) >= grid_y_size ? (grid_y_size - 1) : (row - 1));
@@ -188,6 +207,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'J':
                 {
+                    // erase in display csi n j
                     int mode = parser->params_present ? n : 0;
                     if (mode == 0 || mode == 1) {
                         for (int y = mode == 0 ? *cursor_row : 0;
@@ -206,6 +226,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'K':
                 {
+                    // erase in line csi n k
                     int mode = parser->params_present ? n : 0;
                     int y = *cursor_row;
                     int start_col, end_col;
@@ -226,6 +247,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'L':
                 {
+                    // insert line csi n l
                     if (*cursor_row < *scroll_top || *cursor_row > *scroll_bottom)
                         break;
                     int count = parser->params_present ? n : 1;
@@ -250,6 +272,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'M':
                 {
+                    // delete line csi n m
                     if (*cursor_row < *scroll_top || *cursor_row > *scroll_bottom)
                         break;
                     int count = parser->params_present ? n : 1;
@@ -274,6 +297,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'S':
                 {
+                    // scroll up csi n s
                     int count = parser->params_present ? n : 1;
                     if (count < 0)
                         count = 0;
@@ -288,6 +312,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'T':
                 {
+                    // scroll down csi n t
                     int count = parser->params_present ? n : 1;
                     if (count < 0)
                         count = 0;
@@ -302,6 +327,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 break;
             case 'r':
                 {
+                    // set scroll region csi top bottom r
                     if (!parser->params_present) {
                         *scroll_top = 0;
                         *scroll_bottom = grid_y_size - 1;
@@ -332,6 +358,7 @@ int esc_parser_process(esc_parser_t *parser, uint8_t byte, int *cursor_row, int 
                 }
                 break;
             case 'm':
+                // select graphic rendition csi parameters m
                 break;
             default:
                 break;
